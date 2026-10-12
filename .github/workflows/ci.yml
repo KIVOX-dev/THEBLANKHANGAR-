@@ -1,0 +1,179 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+# Every value below is a non-secret CI-only placeholder — never a real credential, and
+# never the documented dev-only placeholders either (backend/src/config/env.ts and
+# frontend/lib/jwt.ts both reject those outright once NODE_ENV=production, which a
+# production build/start triggers). No payment provider keys are set anywhere in this
+# file — PAYMENT_PROVIDER stays "mock", so no real payment operation ever runs in CI.
+env:
+  NODE_VERSION: "22"
+  CI_DATABASE_URL: "mongodb://localhost:27017/blankhangar_ci?replicaSet=rs0"
+  CI_JWT_SECRET: "ci-only-secret-never-used-outside-actions-0123456789ab"
+  CI_SEED_ADMIN_EMAIL: "admin@ci.local"
+  CI_SEED_ADMIN_PASSWORD: "Ci-Test-Only-12345"
+
+jobs:
+  backend-checks:
+    name: Backend — typecheck, schema, unit tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      DATABASE_URL: ${{ env.CI_DATABASE_URL }}
+      JWT_SECRET: ${{ env.CI_JWT_SECRET }}
+      SEED_ADMIN_EMAIL: ${{ env.CI_SEED_ADMIN_EMAIL }}
+      SEED_ADMIN_PASSWORD: ${{ env.CI_SEED_ADMIN_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+      # No live database is needed here: DATABASE_URL only has to be well-formed
+      # (Prisma validates the connection string, it doesn't dial out) for `prisma
+      # generate`/typecheck, and the unit tests below never touch a real Prisma client.
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npx prisma validate
+      - run: npm test
+
+  frontend-checks:
+    name: Frontend — lint, typecheck, unit tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+
+  pricing-drift:
+    name: Pricing logic drift check (CQ-P2-01)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: node scripts/check-pricing-drift.mjs
+
+  integration-and-e2e:
+    name: Backend integration tests + Playwright E2E smoke test
+    runs-on: ubuntu-latest
+    needs: [backend-checks, frontend-checks]
+    env:
+      DATABASE_URL: ${{ env.CI_DATABASE_URL }}
+      JWT_SECRET: ${{ env.CI_JWT_SECRET }}
+      SEED_ADMIN_EMAIL: ${{ env.CI_SEED_ADMIN_EMAIL }}
+      SEED_ADMIN_PASSWORD: ${{ env.CI_SEED_ADMIN_PASSWORD }}
+      PAYMENT_PROVIDER: "mock"
+      STORAGE_DRIVER: "local"
+      FRONTEND_ORIGIN: "http://localhost:3000"
+      BACKEND_URL: "http://localhost:4000"
+      NEXT_PUBLIC_ASSET_URL: "http://localhost:4000"
+      NEXT_PUBLIC_SITE_URL: "http://localhost:3000"
+      NEXT_PUBLIC_PAYMENT_PROVIDER: "mock"
+    steps:
+      - uses: actions/checkout@v4
+
+      # Mirrors docker-compose.yml's single-node replica set — Prisma needs one for the
+      # transactions in order creation and stock moves; plain standalone MongoDB can't do it.
+      - name: Start a local MongoDB replica set
+        run: |
+          docker run -d --name mongo -p 27017:27017 mongo:7 --replSet rs0 --bind_ip_all
+          for i in $(seq 1 30); do
+            if docker exec mongo mongosh --quiet --eval \
+              "try { rs.status().ok } catch (e) { rs.initiate({_id:'rs0',members:[{_id:0,host:'localhost:27017'}]}).ok }" \
+              > /dev/null 2>&1; then
+              echo "MongoDB replica set is ready"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "MongoDB replica set never became ready" >&2
+          exit 1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install backend dependencies
+        working-directory: backend
+        run: npm ci
+
+      - name: Push schema and seed the CI database
+        working-directory: backend
+        run: |
+          npm run db:push -- --accept-data-loss
+          npm run db:seed
+
+      # Exercises real Prisma transactions (stock decrement/restock, order creation) —
+      # this is what DB-P2-03's N+1 fix and COM-P2-01's transition guard are regression-tested against.
+      - name: Run backend integration tests
+        working-directory: backend
+        run: npm run test:integration
+
+      - name: Start the backend server
+        working-directory: backend
+        run: |
+          npm run start &
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:4000/health > /dev/null && exit 0
+            sleep 2
+          done
+          echo "Backend never became healthy" >&2
+          exit 1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      # Needs the backend up: generateStaticParams on the product/collection pages fetches
+      # the product/category catalog from it at build time.
+      - name: Build the frontend
+        working-directory: frontend
+        run: npm run build
+
+      - name: Install Playwright browsers
+        working-directory: frontend
+        run: npx playwright install --with-deps chromium
+
+      - name: Start the frontend server
+        working-directory: frontend
+        run: |
+          npm run start &
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:3000 > /dev/null && exit 0
+            sleep 2
+          done
+          echo "Frontend never became healthy" >&2
+          exit 1
+
+      # Add product to cart -> checkout -> order confirmation, using the seeded demo
+      # customer and PAYMENT_PROVIDER=mock — no real payment credentials are involved.
+      - name: Run the Playwright E2E smoke test
+        working-directory: frontend
+        run: npm run test:e2e

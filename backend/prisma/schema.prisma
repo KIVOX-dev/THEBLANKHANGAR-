@@ -1,0 +1,319 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mongodb"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  CUSTOMER
+  STAFF
+  ADMIN
+}
+
+enum ProductStatus {
+  DRAFT
+  LIVE
+  ARCHIVED
+}
+
+enum OrderStatus {
+  PLACED
+  CONFIRMED
+  PACKED
+  SHIPPED
+  OUT_FOR_DELIVERY
+  DELIVERED
+  CANCELLED
+  RETURNED
+}
+
+enum PaymentStatus {
+  PENDING
+  PAID
+  FAILED
+  REFUNDED
+}
+
+enum DiscountType {
+  PERCENT
+  FIXED
+}
+
+enum StockChangeSource {
+  MANUAL
+  ORDER
+  CANCELLATION
+  RETURN
+}
+
+model User {
+  id           String   @id @default(auto()) @map("_id") @db.ObjectId
+  name         String
+  email        String   @unique
+  phone        String?
+  passwordHash String
+  role         Role     @default(CUSTOMER)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  addresses      Address[]
+  orders         Order[]
+  wishlistItems  Wishlist[]
+  reviews        Review[]
+  stockLogs      StockLog[]         @relation("StockLogAdmin")
+  statusChanges  OrderStatusHistory[] @relation("StatusChangedBy")
+}
+
+model Address {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  userId    String   @db.ObjectId
+  fullName  String
+  line1     String
+  line2     String?
+  city      String
+  state     String
+  pincode   String
+  phone     String
+  isDefault Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user   User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  orders Order[]
+
+  @@index([userId])
+}
+
+model Category {
+  id          String   @id @default(auto()) @map("_id") @db.ObjectId
+  name        String
+  slug        String   @unique
+  description String?
+  image       String?
+  parentId    String?  @db.ObjectId
+  comingSoon  Boolean  @default(false)
+  sortOrder   Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  parent   Category?  @relation("CategoryTree", fields: [parentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  children Category[] @relation("CategoryTree")
+  products Product[]
+
+  @@index([parentId])
+}
+
+model Product {
+  id                String        @id @default(auto()) @map("_id") @db.ObjectId
+  title             String
+  slug              String        @unique
+  description       String
+  categoryId        String        @db.ObjectId
+  fit               String?
+  type              String?
+  fabric            String?
+  careInstructions  String?
+  basePrice         Float
+  mrp               Float
+  images            String[]
+  status            ProductStatus @default(LIVE)
+  isFeatured        Boolean       @default(false)
+  isNewArrival      Boolean       @default(false)
+  isBestseller      Boolean       @default(false)
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+
+  category      Category         @relation(fields: [categoryId], references: [id])
+  variants      ProductVariant[]
+  wishlistItems Wishlist[]
+  reviews       Review[]
+
+  @@index([categoryId])
+  @@index([status])
+  // Compound indexes for the storefront's most common filter+sort combinations —
+  // every catalog query starts from status = LIVE, then narrows/sorts by one of these.
+  @@index([status, basePrice])
+  @@index([status, isFeatured])
+  @@index([status, isBestseller])
+  @@index([status, isNewArrival])
+}
+
+model ProductVariant {
+  id            String   @id @default(auto()) @map("_id") @db.ObjectId
+  productId     String   @db.ObjectId
+  size          String
+  color         String?
+  colorHex      String?
+  sku           String   @unique
+  stock         Int      @default(0)
+  priceOverride Float?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  product    Product     @relation(fields: [productId], references: [id], onDelete: Cascade)
+  orderItems OrderItem[]
+  stockLogs  StockLog[]
+
+  @@index([productId])
+  // Backs the admin dashboard's low-stock query (filter + sort by stock, capped to 12).
+  @@index([stock])
+}
+
+model Order {
+  id                String        @id @default(auto()) @map("_id") @db.ObjectId
+  orderNumber       String        @unique
+  userId            String        @db.ObjectId
+  status            OrderStatus   @default(PLACED)
+  paymentStatus     PaymentStatus @default(PENDING)
+  paymentMethod     String        @default("MOCK")
+  paymentReference  String?
+  subtotal          Float
+  shipping          Float         @default(0)
+  tax               Float         @default(0)
+  discount          Float         @default(0)
+  total             Float
+  couponCode        String?
+  shippingAddressId String        @db.ObjectId
+  courierName       String?
+  trackingNumber    String?
+  estimatedDelivery DateTime?
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+
+  user            User                 @relation(fields: [userId], references: [id])
+  shippingAddress Address              @relation(fields: [shippingAddressId], references: [id])
+  items           OrderItem[]
+  statusHistory   OrderStatusHistory[]
+  stockLogs       StockLog[]
+
+  @@index([userId])
+  @@index([status])
+  @@index([createdAt])
+}
+
+model OrderItem {
+  id               String @id @default(auto()) @map("_id") @db.ObjectId
+  orderId          String @db.ObjectId
+  productVariantId String @db.ObjectId
+  quantity         Int
+  priceAtPurchase  Float
+
+  productTitle String
+  variantSize  String
+  variantColor String?
+  productImage String?
+  productSlug  String
+
+  order   Order          @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  variant ProductVariant @relation(fields: [productVariantId], references: [id])
+
+  @@index([orderId])
+  @@index([productVariantId])
+}
+
+model OrderStatusHistory {
+  id               String      @id @default(auto()) @map("_id") @db.ObjectId
+  orderId          String      @db.ObjectId
+  status           OrderStatus
+  note             String?
+  changedByAdminId String?     @db.ObjectId
+  createdAt        DateTime    @default(now())
+
+  order          Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  changedByAdmin User? @relation("StatusChangedBy", fields: [changedByAdminId], references: [id])
+
+  @@index([orderId])
+}
+
+model StockLog {
+  id        String            @id @default(auto()) @map("_id") @db.ObjectId
+  variantId String            @db.ObjectId
+  delta     Int
+  stockAfter Int
+  reason    String
+  source    StockChangeSource
+  adminId   String?           @db.ObjectId
+  orderId   String?           @db.ObjectId
+  createdAt DateTime          @default(now())
+
+  variant ProductVariant @relation(fields: [variantId], references: [id], onDelete: Cascade)
+  admin   User?          @relation("StockLogAdmin", fields: [adminId], references: [id])
+  order   Order?         @relation(fields: [orderId], references: [id])
+
+  @@index([variantId])
+  @@index([createdAt])
+}
+
+model Wishlist {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  userId    String   @db.ObjectId
+  productId String   @db.ObjectId
+  createdAt DateTime @default(now())
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, productId])
+  @@index([userId])
+}
+
+model Review {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  productId String   @db.ObjectId
+  userId    String   @db.ObjectId
+  rating    Int
+  title     String?
+  body      String
+  createdAt DateTime @default(now())
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([productId, userId])
+  @@index([productId])
+}
+
+model Coupon {
+  id            String       @id @default(auto()) @map("_id") @db.ObjectId
+  code          String       @unique
+  description   String?
+  discountType  DiscountType
+  discountValue Float
+  minOrderValue Float        @default(0)
+  maxDiscount   Float?
+  expiresAt     DateTime?
+  isActive      Boolean      @default(true)
+  usageLimit    Int?
+  usageCount    Int          @default(0)
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+}
+
+type HeroBanner {
+  id       String
+  title    String
+  subtitle String?
+  cta      String?
+  href     String
+  image    String
+  sortOrder Int    @default(0)
+  /** True when `image`'s background is dark enough for light (bone) overlay text. */
+  darkBackground Boolean @default(true)
+}
+
+model Settings {
+  id                      String       @id @default(auto()) @map("_id") @db.ObjectId
+  singleton               String       @unique @default("SETTINGS")
+  shippingCharge          Float        @default(79)
+  freeShippingThreshold   Float        @default(1499)
+  taxRatePercent          Float        @default(5)
+  lowStockThreshold       Int          @default(5)
+  announcementMessages    String[]
+  heroBanners             HeroBanner[]
+  storeEmail              String       @default("hello@theblankhangar.com")
+  storePhone              String       @default("+91 90000 00000")
+  updatedAt               DateTime     @updatedAt
+}

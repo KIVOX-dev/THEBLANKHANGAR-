@@ -1,0 +1,42 @@
+{
+  "name": "the-blank-hangar-backend",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "start": "tsx src/server.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
+    "postinstall": "prisma generate",
+    "db:push": "prisma db push",
+    "db:seed": "tsx prisma/seed.ts",
+    "db:studio": "prisma studio",
+    "build:vercel": "esbuild src/server.ts --bundle --platform=node --format=cjs --packages=external --alias:@=./src --outfile=api/index.js"
+  },
+  "dependencies": {
+    "@prisma/client": "^6.19.3",
+    "bcryptjs": "^3.0.3",
+    "cors": "^2.8.5",
+    "dotenv": "^17.4.2",
+    "express": "^5.1.0",
+    "jose": "^6.0.11",
+    "multer": "^2.0.1",
+    "pino": "^10.3.1",
+    "pino-http": "^11.0.0",
+    "prisma": "^6.19.3",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.17",
+    "@types/express": "^5.0.0",
+    "@types/multer": "^1.4.12",
+    "@types/node": "^20",
+    "esbuild": "^0.28.2",
+    "pino-pretty": "^13.1.3",
+    "tsx": "^4.23.12",
+    "typescript": "^5",
+    "vitest": "^4.1.10"
+  }
+}
