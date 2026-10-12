@@ -1,0 +1,44 @@
+# Render Blueprint for the API. The frontend is deployed separately (e.g. Vercel).
+# Secret values (sync: false) are entered in the Render dashboard on first deploy.
+services:
+  - type: web
+    name: blank-hangar-api
+    runtime: node
+    rootDir: backend
+    plan: free
+    region: frankfurt
+    # devDependencies are needed at build time (prisma CLI) and at runtime (tsx runs the TS directly).
+    buildCommand: npm install --include=dev
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_VERSION
+        value: 22
+      - key: DATABASE_URL # MongoDB Atlas (replica set) connection string
+        sync: false
+      - key: JWT_SECRET # must equal the frontend's JWT_SECRET
+        sync: false
+      - key: FRONTEND_ORIGIN # e.g. https://your-site.vercel.app
+        sync: false
+      - key: PAYMENT_PROVIDER
+        value: mock
+      - key: RAZORPAY_KEY_ID
+        sync: false
+      - key: RAZORPAY_KEY_SECRET
+        sync: false
+      - key: STORAGE_DRIVER
+        value: b2
+      - key: B2_APPLICATION_KEY_ID
+        sync: false
+      - key: B2_APPLICATION_KEY
+        sync: false
+      - key: B2_BUCKET_NAME
+        value: blank-hanger
+      - key: B2_S3_ENDPOINT
+        value: https://s3.eu-central-003.backblazeb2.com
+      - key: B2_REGION
+        value: eu-central-003
+      - key: SEED_ADMIN_EMAIL
+        sync: false
+      - key: SEED_ADMIN_PASSWORD
+        sync: false

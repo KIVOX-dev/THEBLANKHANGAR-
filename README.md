@@ -103,7 +103,8 @@ history, coupons, store settings, and placeholder artwork.
 | `JWT_SECRET`, `JWT_EXPIRES_IN` | Token signing. The secret must match the frontend's |
 | `PAYMENT_PROVIDER` | `mock` (default) or `razorpay` |
 | `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET` | Needed only for `razorpay` |
-| `STORAGE_DRIVER` | `local` (writes to `public/uploads`) |
+| `STORAGE_DRIVER` | `local` (writes to `public/uploads`) or `b2` (Backblaze B2) |
+| `B2_APPLICATION_KEY_ID`, `B2_APPLICATION_KEY`, `B2_BUCKET_NAME`, `B2_S3_ENDPOINT`, `B2_REGION` | Needed for `b2` |
 | `SEED_ADMIN_EMAIL`, `SEED_ADMIN_PASSWORD` | Admin account created by the seed |
 
 **Frontend (`frontend/.env`)**
@@ -155,18 +156,26 @@ Never commit `.env` files. They hold the database credentials and the JWT secret
 
 ## Deployment
 
-The backend ships with `vercel.json` and a `build:vercel` script, so it deploys as one
-serverless function. Deploy each app as its own Vercel project, with the root directory set
-to `backend` or `frontend`.
+The **backend runs on Render** and the **frontend on Vercel** (or any Next.js host).
 
-1. Set the env vars above on both projects. The frontend's `BACKEND_URL` and
-   `NEXT_PUBLIC_ASSET_URL` point to the backend's URL. `FRONTEND_ORIGIN` on the backend
-   points to the frontend's URL. Use a new, strong `JWT_SECRET`, identical on both.
-2. In Atlas Network Access, allow Vercel's outbound traffic (it has no fixed IPs, so this
-   usually means `0.0.0.0/0`). Use a strong database password.
-3. **Image uploads need a cloud storage driver first.** The `local` driver writes to disk,
-   which is read-only and ephemeral on Vercel. `storeImage()` in `backend/src/storage.ts` is
-   the seam to add Vercel Blob or Cloudinary.
+**Backend (Render)**: `render.yaml` at the repo root is a Blueprint. Create a Blueprint
+instance from it, or make a Web Service manually with root directory `backend`, build command
+`npm install --include=dev` and start command `npm start`. Health check path: `/health`.
+Enter the secret values in the dashboard: `DATABASE_URL`, `JWT_SECRET`, `FRONTEND_ORIGIN`,
+`B2_APPLICATION_KEY_ID`, `B2_APPLICATION_KEY`, and the seed admin credentials.
+
+**Frontend (Vercel)**: set the project root to `frontend`, with
+`BACKEND_URL` and `NEXT_PUBLIC_ASSET_URL` both set to the Render URL, `JWT_SECRET` identical to
+the backend's, and `NEXT_PUBLIC_SITE_URL` set to the site's URL.
+
+**Image storage (Backblaze B2)**: set `STORAGE_DRIVER=b2` with the `B2_*` variables. Images go
+to a private bucket and the API streams them at `/uploads/*`, so keys never reach the browser.
+MongoDB stores only data, with image paths as plain strings. Render's disk is ephemeral, so
+don't use the `local` driver there.
+
+**Database (Atlas)**: allow Render's outbound IPs in Network Access (or `0.0.0.0/0`) and use a
+strong password. Seed once from your machine with `npm run db:seed`. With
+`STORAGE_DRIVER=b2` it also uploads the seed images.
 
 A `Dockerfile` for each app is also provided for container hosting.
 
