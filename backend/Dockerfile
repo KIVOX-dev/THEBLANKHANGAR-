@@ -1,14 +1,14 @@
 # Production image for the Express API. Runs the same way `npm start` does locally
 # (tsx executing TypeScript directly) — this project has no separate compiled-JS build
 # step, so the image mirrors that rather than introducing a new one.
-FROM node:22-slim AS deps
+FROM node:26-slim AS deps
 RUN apt-get update -y && apt-get install -y --no-install-recommends openssl && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY package.json package-lock.json ./
 COPY prisma ./prisma
 RUN npm ci
 
-FROM node:22-slim AS runtime
+FROM node:26-slim AS runtime
 RUN apt-get update -y && apt-get install -y --no-install-recommends openssl && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 ENV NODE_ENV=production
