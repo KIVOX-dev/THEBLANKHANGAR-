@@ -57,9 +57,9 @@ export function SizeGuideModal({ open, onClose }: { open: boolean; onClose: () =
                 {ROWS.map((row) => (
                   <tr key={row.size} className="border-b border-line/60">
                     <td className="py-2.5 pr-4 font-medium">{row.size}</td>
-                    <td className="py-2.5 pr-4 tabular-nums">{row.chest}"</td>
-                    <td className="py-2.5 pr-4 tabular-nums">{row.length}"</td>
-                    <td className="py-2.5 tabular-nums">{row.shoulder}"</td>
+                    <td className="py-2.5 pr-4 tabular-nums">{row.chest}&quot;</td>
+                    <td className="py-2.5 pr-4 tabular-nums">{row.length}&quot;</td>
+                    <td className="py-2.5 tabular-nums">{row.shoulder}&quot;</td>
                   </tr>
                 ))}
               </tbody>

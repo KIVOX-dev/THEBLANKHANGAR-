@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { notFound } from "next/navigation";
 import { Suspense } from "react";
 import { FilterPanel } from "@/components/collection/FilterPanel";
@@ -66,7 +67,7 @@ export default async function CollectionPage({ params, searchParams }: PageProps
       )}
 
       <nav aria-label="Breadcrumb" className="mb-5 text-xs text-ink-muted">
-        <a href="/" className="hover:text-ink">Home</a>
+        <Link href="/" className="hover:text-ink">Home</Link>
         <span className="mx-2">/</span>
         <span className="text-ink">{category.name}</span>
       </nav>

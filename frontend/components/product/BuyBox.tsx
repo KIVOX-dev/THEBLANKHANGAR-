@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
 import { cn, discountPercent, formatPrice } from "@/lib/utils";
@@ -89,11 +90,11 @@ export function BuyBox({ product }: { product: ProductDetailData }) {
   return (
     <div>
       <nav aria-label="Breadcrumb" className="mb-4 text-xs text-ink-muted">
-        <a href="/" className="hover:text-ink">Home</a>
+        <Link href="/" className="hover:text-ink">Home</Link>
         <span className="mx-2">/</span>
-        <a href={`/collections/${product.category.slug}`} className="hover:text-ink">
+        <Link href={`/collections/${product.category.slug}`} className="hover:text-ink">
           {product.category.name}
-        </a>
+        </Link>
       </nav>
 
       <h1 className="text-2xl leading-tight lg:text-4xl">{product.title}</h1>
