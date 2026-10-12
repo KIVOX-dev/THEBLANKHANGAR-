@@ -2,12 +2,14 @@
 # (tsx executing TypeScript directly) — this project has no separate compiled-JS build
 # step, so the image mirrors that rather than introducing a new one.
 FROM node:22-slim AS deps
+RUN apt-get update -y && apt-get install -y --no-install-recommends openssl && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY package.json package-lock.json ./
 COPY prisma ./prisma
 RUN npm ci
 
 FROM node:22-slim AS runtime
+RUN apt-get update -y && apt-get install -y --no-install-recommends openssl && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 ENV NODE_ENV=production
 COPY --from=deps /app/node_modules ./node_modules
