@@ -3,6 +3,9 @@ import bcrypt from "bcryptjs";
 import { PrismaClient } from "@prisma/client";
 import { env } from "@/config/env";
 import { BCRYPT_COST } from "@/utils";
+import { readdirSync, readFileSync } from "node:fs";
+import { extname, join } from "node:path";
+import { usesB2, putB2Object } from "@/storage";
 import { ensureArtDir, productShot, tile } from "./placeholder-art";
 
 const prisma = new PrismaClient();
@@ -510,6 +513,25 @@ async function main() {
       ],
     },
   });
+
+  if (usesB2()) {
+    console.log("→ Uploading seed images to Backblaze B2…");
+    const root = join(process.cwd(), "public", "uploads");
+    const types: Record<string, string> = {
+      ".svg": "image/svg+xml",
+      ".jpg": "image/jpeg",
+      ".jpeg": "image/jpeg",
+      ".png": "image/png",
+      ".webp": "image/webp",
+    };
+    for (const sub of ["seed", "photos"]) {
+      for (const f of readdirSync(join(root, sub))) {
+        const type = types[extname(f).toLowerCase()];
+        if (!type) continue;
+        await putB2Object(`${sub}/${f}`, readFileSync(join(root, sub, f)), type);
+      }
+    }
+  }
 
   console.log("\n✔ Seed complete.\n");
   console.log("  Admin    →", env.seedAdminEmail, "/", adminPassword);

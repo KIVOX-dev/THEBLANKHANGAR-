@@ -16,6 +16,7 @@
     "build:vercel": "esbuild src/server.ts --bundle --platform=node --format=cjs --packages=external --alias:@=./src --outfile=api/index.js"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1150.0",
     "@prisma/client": "^6.19.3",
     "bcryptjs": "^3.0.3",
     "cors": "^2.8.5",
