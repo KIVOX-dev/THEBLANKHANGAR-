@@ -1,187 +1,208 @@
-# THE BLANK HANGAR
+# The Blank Hangar
 
-A full-stack e-commerce storefront and admin panel for a men's streetwear D2C brand — a
-standalone **Next.js frontend** and a standalone **Express/TypeScript API backend**, talking
-to each other over HTTP.
+A full-stack e-commerce storefront and admin panel for a men's streetwear D2C brand.
+It is two separate apps that talk over HTTP:
 
-## Architecture
+- **`frontend/`**: Next.js 16 (App Router) with the storefront, the admin UI, and a thin
+  Backend-for-Frontend (BFF) proxy under `app/api/**`.
+- **`backend/`**: Express 5 + TypeScript API with all business logic, Prisma + MongoDB, and JWT auth.
 
 ```
 THEBLANKHANGAR/
-├── frontend/            Next.js 16 (App Router) — storefront, admin UI, and a thin
-│                        Backend-for-Frontend (BFF) proxy layer under app/api/**
-├── backend/             Express API — all business logic, Prisma/MongoDB, JWT auth
-├── docker-compose.yml   Optional local MongoDB replica set (Atlas works with no setup)
-├── requirements.txt     (in each folder) plain-text dependency reference — package.json is
-│                        the real source of truth; this is human-readable only
-└── README.md
+├── frontend/             Storefront (/), admin panel (/admin), BFF routes (app/api/**)
+├── backend/              REST API, Prisma schema + seed, uploads, tests
+├── scripts/              check-pricing-drift.mjs (CI guardrail)
+├── .github/workflows/    CI: typecheck, lint, unit, integration and E2E smoke tests
+└── docker-compose.yml    Optional local MongoDB replica set
 ```
 
-**The browser only ever talks to the frontend** (`localhost:3000`), never directly to the
-backend (`localhost:4000`). Every `frontend/app/api/**/route.ts` file is a thin proxy: it
-forwards the request to the backend, attaching the signed-in user's session token, and
-relays the response back unchanged. This is a standard Backend-for-Frontend (BFF) pattern —
-it means:
+## How it fits together
 
-- No CORS exposure to the browser (server-to-server calls aren't subject to CORS at all).
-- The JWT lives only in an httpOnly cookie set by the frontend's own domain — it's never
-  visible to client-side JavaScript.
-- Server Components that need data (product listings, account pages, admin pages) call
-  `frontend/lib/api-client.ts` / `admin-api-client.ts`, which fetch from the backend
-  server-side — the frontend has **no direct database access** anywhere.
+The browser only talks to the frontend (`localhost:3000`), never to the backend
+(`localhost:4000`). Each `frontend/app/api/**/route.ts` forwards the request to the backend,
+attaches the signed-in user's token, and returns the response.
+
+- The JWT lives in an httpOnly cookie on the frontend's domain, so client JS can't read it.
+- There is no browser-to-backend CORS surface. Server-to-server calls aren't subject to CORS.
+- Server Components fetch through `frontend/lib/api-client.ts` and `admin-api-client.ts`.
+  The frontend has no direct database access.
 
 ## Stack
 
-**Frontend** (`frontend/`): Next.js 16 (App Router) + TypeScript + Tailwind CSS v4, Zustand
-(cart/wishlist), `jose` for JWT verification, Recharts for the admin dashboard.
+| Layer    | Tech |
+| -------- | ---- |
+| Frontend | Next.js 16, React 19, TypeScript, Tailwind CSS v4, Zustand, `jose`, Recharts |
+| Backend  | Express 5, TypeScript, Prisma **v6**, MongoDB, `jose`, `bcryptjs`, `multer`, `zod` |
+| Testing  | Vitest (unit + integration), Playwright (E2E smoke), ESLint |
 
-**Backend** (`backend/`): Express 5 + TypeScript, Prisma ORM v6 + MongoDB, `jose` for JWT
-signing/verification, `bcryptjs` for password hashing, `multer` for image uploads, `zod` for
-request validation.
+> **Keep Prisma on v6.** Prisma v7 dropped the MongoDB connector. Don't run
+> `npm i prisma@latest` in `backend/`.
 
-### Why Prisma v6, not v7
+## Getting started
 
-Prisma ORM v7 removed the MongoDB connector entirely. `backend/package.json` pins `prisma`
-and `@prisma/client` to `^6`. Do not run `npm i prisma@latest` in `backend/` — it will break
-the database layer.
+Prerequisites: Node 22+ and a MongoDB **replica set**. Order creation and stock moves use
+transactions, which standalone MongoDB doesn't support.
 
-## Setup
+### 1. Database
 
-### 1. Backend
+- **MongoDB Atlas** (recommended): create a cluster and use its connection string. Allow your
+  IP under Network Access.
+- **Local Docker**: run `docker compose up -d` from the repo root. The connection string is
+  `mongodb://localhost:27017/blankhangar?replicaSet=rs0&directConnection=true`.
+
+### 2. Backend
 
 ```bash
 cd backend
 npm install
+cp .env.example .env      # then fill in DATABASE_URL and JWT_SECRET
+npm run db:push           # sync the Prisma schema to MongoDB
+npm run db:seed           # demo data (clears existing data first)
+npm run dev               # http://localhost:4000
 ```
 
-**Database** — MongoDB, and it must run as a replica set (Prisma uses transactions for order
-creation and stock movements, which standalone MongoDB doesn't support).
+Generate a secret with `openssl rand -base64 32`. `GET /health` returns `{ "ok": true }`
+when the API is up.
 
-- **Option A — MongoDB Atlas** (recommended, zero local setup): create a free cluster, copy
-  the connection string into `backend/.env` as `DATABASE_URL`.
-- **Option B — local Docker**: from the repo root, `docker compose up -d` starts a
-  single-node replica set at `mongodb://localhost:27017/blankhangar?replicaSet=rs0&directConnection=true`.
-
-Copy `backend/.env.example` to `backend/.env` and fill in `DATABASE_URL` and `JWT_SECRET`
-(generate one with `openssl rand -base64 32`). Everything else has a sane default (mock
-payments, local image storage on port 4000).
-
-```bash
-npm run db:push
-npm run db:seed
-```
-
-The seed creates the T-Shirts category (plus Shirts/Bottomwear/Hoodies/Accessories marked
-"Coming Soon"), ~10 products with size-variant stock, a sample order with a full tracking
-history, coupons, store settings, and generated/downloaded placeholder artwork.
-
-Seeded logins:
-
-| Role     | Email                     | Password       |
-| -------- | -------------------------- | --------------- |
-| Admin    | admin@theblankhangar.com   | Admin@12345     |
-| Staff    | staff@theblankhangar.com   | Staff@12345     |
-| Customer | customer@example.com       | Customer@12345  |
-
-```bash
-npm run dev
-```
-
-Runs at `http://localhost:4000`. `GET /health` returns `{ ok: true }` once it's up.
-
-### 2. Frontend
+### 3. Frontend
 
 ```bash
 cd frontend
 npm install
+cp .env.example .env      # JWT_SECRET must equal the backend's
+npm run dev               # http://localhost:3000
 ```
 
-Copy `frontend/.env.example` to `frontend/.env`. **`JWT_SECRET` must match the backend's
-exactly** — both sides verify the same signed token. `BACKEND_URL` (server-side only) and
-`NEXT_PUBLIC_ASSET_URL` (browser-visible, for image URLs) both default to
-`http://localhost:4000`.
+Both servers must be running. The storefront is at `/` and the admin panel at `/admin`.
+Admin and staff sign in at `/admin/login`. Customers use `/login`.
 
-```bash
-npm run dev
-```
+### Seeded accounts (development only)
 
-Runs at `http://localhost:3000`. Storefront at `/`, admin panel at `/admin` (staff/admin
-accounts only — `/admin/login` is a separate login form from the customer one at `/login`).
+| Role     | Email                    | Password       |
+| -------- | ------------------------ | -------------- |
+| Admin    | admin@theblankhangar.com | Admin@12345    |
+| Staff    | staff@theblankhangar.com | Staff@12345    |
+| Customer | customer@example.com     | Customer@12345 |
 
-**Both servers need to be running** for the app to work — two terminals, `npm run dev` in
-each.
+The admin email and password come from `SEED_ADMIN_EMAIL` and `SEED_ADMIN_PASSWORD` in
+`backend/.env`. Change all three passwords before any real deployment.
+
+The seed creates the T-Shirts category (Shirts, Bottomwear, Hoodies and Accessories are
+marked "Coming Soon"), about ten products with per-size stock, a sample order with tracking
+history, coupons, store settings, and placeholder artwork.
+
+## Environment variables
+
+**Backend (`backend/.env`)**
+
+| Variable | Purpose |
+| -------- | ------- |
+| `DATABASE_URL` | MongoDB connection string (replica set) |
+| `PORT` | API port (default 4000) |
+| `FRONTEND_ORIGIN` | Frontend origin allowed by CORS (for direct API testing) |
+| `JWT_SECRET`, `JWT_EXPIRES_IN` | Token signing. The secret must match the frontend's |
+| `PAYMENT_PROVIDER` | `mock` (default) or `razorpay` |
+| `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET` | Needed only for `razorpay` |
+| `STORAGE_DRIVER` | `local` (writes to `public/uploads`) |
+| `SEED_ADMIN_EMAIL`, `SEED_ADMIN_PASSWORD` | Admin account created by the seed |
+
+**Frontend (`frontend/.env`)**
+
+| Variable | Purpose |
+| -------- | ------- |
+| `BACKEND_URL` | Server-side base URL of the API |
+| `NEXT_PUBLIC_ASSET_URL` | Browser-visible base URL for backend-served images |
+| `JWT_SECRET` | Must match the backend's |
+| `NEXT_PUBLIC_SITE_URL` | Public site URL (sitemap, metadata) |
+| `NEXT_PUBLIC_PAYMENT_PROVIDER` | Display-only label at checkout |
+
+Never commit `.env` files. They hold the database credentials and the JWT secret.
 
 ## Scripts
 
-**Backend** (`backend/`):
+**Backend**
 
-| Command             | What it does                                      |
-| -------------------- | -------------------------------------------------- |
-| `npm run dev`         | Start the API with hot reload (`tsx watch`)        |
-| `npm start`           | Start the API (no watch)                           |
-| `npm run typecheck`   | Type-check without emitting                        |
-| `npm run db:push`     | Sync `prisma/schema.prisma` to MongoDB              |
-| `npm run db:seed`     | Reseed demo data (destructive — clears prior data)  |
-| `npm run db:studio`   | Open Prisma Studio                                  |
+| Command | What it does |
+| ------- | ------------ |
+| `npm run dev` | API with hot reload |
+| `npm start` | API without watch |
+| `npm run typecheck` | Type-check only |
+| `npm test` | Unit tests |
+| `npm run test:integration` | Integration tests (needs a MongoDB replica set) |
+| `npm run db:push` | Sync the schema to MongoDB |
+| `npm run db:seed` | Re-seed demo data. **Destructive** |
+| `npm run db:studio` | Prisma Studio |
+| `npm run build:vercel` | Bundle the API for Vercel (`api/index.js`) |
 
-**Frontend** (`frontend/`):
+**Frontend**
 
-| Command         | What it does                                    |
-| ----------------- | -------------------------------------------------- |
-| `npm run dev`      | Start the dev server                               |
-| `npm run build`    | Production build (also type-checks everything)     |
-| `npm start`        | Run the production build                           |
+| Command | What it does |
+| ------- | ------------ |
+| `npm run dev` | Dev server |
+| `npm run build` | Production build (type-checks too) |
+| `npm start` | Run the production build |
+| `npm run lint` / `npm run typecheck` | ESLint / TypeScript |
+| `npm test` | Unit tests |
+| `npm run test:e2e` | Playwright smoke test |
 
-## Notable design decisions
+## Admin tips
 
-- **BFF proxy, not direct browser→backend calls** (see Architecture above) — the single
-  biggest structural decision, chosen to avoid exposing CORS/JWT-in-JS risk to the browser
-  while still giving the backend a genuinely separate process/deploy target.
-- **`requireUser`/`requireStaff`/`requireAdmin` kept the same names and shapes** on the
-  frontend (`frontend/lib/session.ts`, JWT-cookie-backed) as they had when this was a single
-  NextAuth-based app — the ~24 pages and route handlers that call them needed only an import
-  path change, not a rewrite.
-- **Image paths are relative in the database, absolute at render time**: `assetUrl()`
-  (`frontend/lib/assets.ts`) prefixes `/uploads/...` paths with `NEXT_PUBLIC_ASSET_URL` only
-  at the point a component renders an `<Image>` — never centrally for data that round-trips
-  back into an admin save (settings hero banners, product images), so editing and re-saving
-  can't accidentally bake in a stale backend URL.
-- **Real-time-enough updates without websockets**: the customer order-tracking page and the
-  PDP's size availability both poll their API endpoints every ~8s (`frontend/hooks/
-  usePolling.ts`), pausing while the tab is hidden. An admin stock edit or status change is
-  visible without a page reload.
-- **Stock is never trusted from the client**: `backend/src/services/orders.ts` re-prices the
-  cart from the database at checkout and decrements stock inside a transaction guarded by a
-  `stock >= quantity` condition, so two customers racing for the last unit can't both win.
-- **Category growth needs no schema change**: `Category.comingSoon` plus a flat category list
-  driven from the DB means adding "Hoodies" later is a data change (flip the flag, add
-  products) — the mega menu, mobile nav and footer all render from the same query.
-- **Payments are provider-shaped, not mock-shaped**: `PaymentProvider`
-  (`backend/src/modules/payments/provider.ts`) is an interface with one method to create an
-  intent and one to verify it. The mock implementation satisfies both synchronously; Razorpay
-  implements the same interface using its Orders API — switching is a
-  `PAYMENT_PROVIDER=razorpay` env change on the backend, not a rewrite.
-- **Audit trail**: every stock change — manual admin edit, order deduction, or
-  cancellation/return restock — writes a `StockLog` row with a reason and (where applicable)
-  the acting admin, visible on each product's edit page.
+- A product appears on the storefront only when its **Status is Live**. Drafts and archived
+  products are hidden everywhere.
+- The home page's **New Arrivals** shows products with **New arrival** ticked. **Featured**
+  and **Bestseller** work the same way.
+- Customers can only buy sizes that have stock.
 
-## Known simplifications
+## Deployment
 
-- Single JWT (7-day expiry) via one httpOnly cookie — no refresh-token rotation.
-- No shared-types package between `frontend/` and `backend/` — DTO shapes are duplicated in
-  `frontend/types/` and kept in sync by hand. Small maintenance cost, avoids a monorepo tool.
-- `docker-compose.yml` covers only local MongoDB; the two app servers run natively via
-  `npm run dev` in each folder, not containerized.
-- CORS on the backend is configured (`FRONTEND_ORIGIN` env var) but isn't load-bearing for
-  normal use — the browser only ever calls the frontend, per the BFF design above. It exists
-  for direct backend testing (Postman/curl) and defense-in-depth.
-- Payments run through the mock provider until real Razorpay keys are supplied.
+The backend ships with `vercel.json` and a `build:vercel` script, so it deploys as one
+serverless function. Deploy each app as its own Vercel project, with the root directory set
+to `backend` or `frontend`.
+
+1. Set the env vars above on both projects. The frontend's `BACKEND_URL` and
+   `NEXT_PUBLIC_ASSET_URL` point to the backend's URL. `FRONTEND_ORIGIN` on the backend
+   points to the frontend's URL. Use a new, strong `JWT_SECRET`, identical on both.
+2. In Atlas Network Access, allow Vercel's outbound traffic (it has no fixed IPs, so this
+   usually means `0.0.0.0/0`). Use a strong database password.
+3. **Image uploads need a cloud storage driver first.** The `local` driver writes to disk,
+   which is read-only and ephemeral on Vercel. `storeImage()` in `backend/src/storage.ts` is
+   the seam to add Vercel Blob or Cloudinary.
+
+A `Dockerfile` for each app is also provided for container hosting.
+
+## Design decisions
+
+- **BFF proxy**: keeps the JWT out of client JS and avoids CORS, while the backend stays a
+  separately deployable service.
+- **Server-side pricing**: `backend/src/services/orders.ts` re-prices the cart from the
+  database at checkout and decrements stock in a transaction guarded by `stock >= quantity`,
+  so two buyers can't both take the last unit. The frontend's `pricing.ts` is display-only,
+  and `scripts/check-pricing-drift.mjs` fails CI if it diverges from the backend copy.
+- **Relative image paths in the database**: `assetUrl()` (`frontend/lib/assets.ts`) adds
+  `NEXT_PUBLIC_ASSET_URL` only when rendering, so re-saving in admin never stores a stale host.
+- **Polling, not websockets**: order tracking and PDP size availability poll every ~8s and
+  pause while the tab is hidden (`frontend/hooks/usePolling.ts`).
+- **Provider-shaped payments**: `PaymentProvider` (`backend/src/modules/payments/provider.ts`)
+  has create and verify methods. Switching from mock to Razorpay is a
+  `PAYMENT_PROVIDER=razorpay` env change.
+- **Categories are data**: `Category.comingSoon` drives the menus and footer, so launching a
+  new category needs no schema change.
+- **Stock audit trail**: every stock change writes a `StockLog` row with a reason and the
+  acting admin, shown on each product's edit page.
+
+## CI
+
+`.github/workflows/ci.yml` runs backend typecheck, `prisma validate` and unit tests, frontend
+lint, typecheck and unit tests, the pricing drift check, and an integration + Playwright E2E
+job against a local MongoDB replica set.
+
+## Known limitations
+
+- A single 7-day JWT in one httpOnly cookie, with no refresh-token rotation.
+- DTO types are duplicated between `frontend/types/` and the backend and kept in sync by hand.
+- Payments use the mock provider until Razorpay keys are supplied.
+- The auth rate limiter is in-memory. A multi-instance deploy needs a shared store such as Redis.
 - Reviews have no moderation queue.
-- The delivery pincode checker validates format and returns an indicative window; it isn't
-  wired to a live courier API.
-- The in-memory rate limiter on the backend's auth endpoints is fine for a single
-  instance/demo; a multi-instance production deploy needs a shared store (e.g. Redis).
-- Product/category/banner imagery is generated placeholder art / downloaded free-license
-  stock photography, not original photography (see `backend/public/uploads/photos/CREDITS.md`).
-#   T H E B L A N K H A N G A R -  
- 
+- The pincode checker validates format and returns an indicative window. It has no courier API.
+- Seed imagery is generated placeholder art and free-license photos
+  (see `backend/public/uploads/photos/CREDITS.md`), not original photography.
