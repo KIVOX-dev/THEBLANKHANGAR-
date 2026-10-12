@@ -1,12 +1,18 @@
-name: CI
+name: CI/CD
 
 on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
+
+# Cancel superseded runs on PRs; never cancel an in-flight run on main (a deploy could be mid-way).
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 # Every value below is a non-secret CI-only placeholder — never a real credential, and
 # never the documented dev-only placeholders either (backend/src/config/env.ts and
@@ -15,10 +21,10 @@ permissions:
 # file — PAYMENT_PROVIDER stays "mock", so no real payment operation ever runs in CI.
 env:
   NODE_VERSION: "22"
-  CI_DATABASE_URL: "mongodb://localhost:27017/blankhangar_ci?replicaSet=rs0"
-  CI_JWT_SECRET: "ci-only-secret-never-used-outside-actions-0123456789ab"
-  CI_SEED_ADMIN_EMAIL: "admin@ci.local"
-  CI_SEED_ADMIN_PASSWORD: "Ci-Test-Only-12345"
+  DATABASE_URL: "mongodb://localhost:27017/blankhangar_ci?replicaSet=rs0"
+  JWT_SECRET: "ci-only-secret-never-used-outside-actions-0123456789ab"
+  SEED_ADMIN_EMAIL: "admin@ci.local"
+  SEED_ADMIN_PASSWORD: "Ci-Test-Only-12345"
 
 jobs:
   backend-checks:
@@ -27,11 +33,6 @@ jobs:
     defaults:
       run:
         working-directory: backend
-    env:
-      DATABASE_URL: ${{ env.CI_DATABASE_URL }}
-      JWT_SECRET: ${{ env.CI_JWT_SECRET }}
-      SEED_ADMIN_EMAIL: ${{ env.CI_SEED_ADMIN_EMAIL }}
-      SEED_ADMIN_PASSWORD: ${{ env.CI_SEED_ADMIN_PASSWORD }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -77,10 +78,6 @@ jobs:
     runs-on: ubuntu-latest
     needs: [backend-checks, frontend-checks]
     env:
-      DATABASE_URL: ${{ env.CI_DATABASE_URL }}
-      JWT_SECRET: ${{ env.CI_JWT_SECRET }}
-      SEED_ADMIN_EMAIL: ${{ env.CI_SEED_ADMIN_EMAIL }}
-      SEED_ADMIN_PASSWORD: ${{ env.CI_SEED_ADMIN_PASSWORD }}
       PAYMENT_PROVIDER: "mock"
       STORAGE_DRIVER: "local"
       FRONTEND_ORIGIN: "http://localhost:3000"
@@ -177,3 +174,132 @@ jobs:
       - name: Run the Playwright E2E smoke test
         working-directory: frontend
         run: npm run test:e2e
+
+  # ---------------------------------------------------------------------------
+  # Security & packaging gates
+  # ---------------------------------------------------------------------------
+  dependency-audit:
+    name: Dependency audit (production deps, critical only)
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        app: [backend, frontend]
+    defaults:
+      run:
+        working-directory: ${{ matrix.app }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - run: npm audit --omit=dev --audit-level=critical
+
+  secret-scan:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  docker-build:
+    name: Backend Docker image builds
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: backend
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ---------------------------------------------------------------------------
+  # CD — runs only on pushes to main, and only after every gate above is green.
+  # Backend deploys first (Render); the frontend build fetches the catalog from the
+  # live API (generateStaticParams), so it must come second.
+  #
+  # Required in Settings → Secrets and variables → Actions:
+  #   secrets: RENDER_DEPLOY_HOOK_URL, VERCEL_TOKEN, VERCEL_ORG_ID, VERCEL_PROJECT_ID
+  #   vars:    BACKEND_PUBLIC_URL (e.g. https://blank-hangar-api.onrender.com)
+  # Turn off auto-deploy on Render and Vercel's Git integration so only this pipeline deploys.
+  # Add required reviewers on the "production" environment for a manual approval gate.
+  # ---------------------------------------------------------------------------
+  deploy-backend:
+    name: Deploy backend → Render
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs:
+      - backend-checks
+      - frontend-checks
+      - pricing-drift
+      - integration-and-e2e
+      - dependency-audit
+      - secret-scan
+      - docker-build
+    runs-on: ubuntu-latest
+    environment:
+      name: production-backend
+      url: ${{ vars.BACKEND_PUBLIC_URL }}
+    steps:
+      - name: Trigger Render deploy
+        env:
+          HOOK: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
+        run: |
+          test -n "$HOOK" || { echo "RENDER_DEPLOY_HOOK_URL is not set" >&2; exit 1; }
+          curl -fsS -X POST "$HOOK" > /dev/null
+          echo "Deploy triggered"
+
+      # Render swaps traffic only once the new instance passes its health check, so poll
+      # until the API answers; a failed deploy leaves this step timing out and fails the run.
+      - name: Wait for the API to be healthy
+        env:
+          URL: ${{ vars.BACKEND_PUBLIC_URL }}
+        run: |
+          sleep 30
+          for i in $(seq 1 40); do
+            if curl -fsS "$URL/health" | grep -q '"ok":true'; then
+              echo "Backend healthy"; exit 0
+            fi
+            sleep 15
+          done
+          echo "Backend did not become healthy in time" >&2
+          exit 1
+
+  deploy-frontend:
+    name: Deploy frontend → Vercel
+    needs: deploy-backend
+    runs-on: ubuntu-latest
+    environment:
+      name: production-frontend
+    env:
+      VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+      VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Install Vercel CLI
+        run: npm install --global vercel@latest
+      - name: Pull production settings
+        run: vercel pull --yes --environment=production --token=${{ secrets.VERCEL_TOKEN }}
+      - name: Build
+        run: vercel build --prod --token=${{ secrets.VERCEL_TOKEN }}
+      - name: Deploy
+        id: deploy
+        run: |
+          url=$(vercel deploy --prebuilt --prod --token=${{ secrets.VERCEL_TOKEN }})
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+          echo "Deployed to $url"
+      - name: Smoke test
+        run: |
+          for i in $(seq 1 10); do
+            curl -fsS -o /dev/null "${{ steps.deploy.outputs.url }}" && exit 0
+            sleep 6
+          done
+          echo "Frontend smoke test failed" >&2
+          exit 1
